@@ -4,8 +4,6 @@ import asyncio
 import os
 from PIL import Image, UnidentifiedImageError
 import json
-from data.config import settings
-from loader import dataBase
 import re
 
 
