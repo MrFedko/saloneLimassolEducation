@@ -20,4 +20,4 @@ client = GoogleSheetsClient(
     sheet_id=settings.SHEET_ID
 )
 messageBuilder = MessageBuilder()
-photo_loader = PhotoLoader(settings.PHOTO_PATH, dataBase, max_concurrent=3, delay=1)
+photo_loader = PhotoLoader(settings.PHOTO_PATH, max_concurrent=3, delay=1)
