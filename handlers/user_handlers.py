@@ -11,8 +11,12 @@ from loader import dataBase, messageBuilder, client, photo_loader
 from .keyboards import menu_cd, back_button_final
 from .menuLists import list_start_menu, list_sheet_categories_menu, list_dishes_by_category_menu
 from data.config import settings
+from middlewares.auto_cleanup import AutoCleanupMiddleware
+
 
 router = Router()
+router.callback_query.middleware(AutoCleanupMiddleware())
+router.message.middleware(AutoCleanupMiddleware())
 
 
 async def clear_photo_folder(photo_path):
@@ -99,50 +103,114 @@ async def dish_detail_callback(
         callback_data: menu_cd,
         state: FSMContext,
 ):
+    import asyncio
+
     MAX_CAPTION_LENGTH = 1024
+
     data = await state.get_data()
     sheet_id = data.get("sheet_id")
     dishes = data.get("dishes")
+
     dishes_list_index = callback_data.dishes_list_index
     table_name = settings.db_tables[sheet_id]
     dish_name = dishes[dishes_list_index]
-    dish_info = dataBase.get_dish_detail(
-        table_name, dish_name
-    )
+
+    dish_info = dataBase.get_dish_detail(table_name, dish_name)
+
     text = messageBuilder.message_return(settings.db_tables[sheet_id])(dish_info)
+
     photo_link = dish_info.get("photo_link")
     photo_path = f"{settings.PHOTO_PATH}{table_name}_{dish_info['id']}.jpg"
+
+    # список для хранения ID сообщений
+    sent_messages = []
+
+    # 🔴 сначала удалим старые сообщения (если были)
+    old_data = await state.get_data()
+    old_messages = old_data.get("extra_messages", [])
+
+    for msg_id in old_messages:
+        try:
+            await call.bot.delete_message(call.message.chat.id, msg_id)
+        except:
+            pass
+
+    await state.update_data(extra_messages=[])
+
+    # 🟢 ЕСЛИ ЕСТЬ ФОТО
     if photo_link and os.path.exists(photo_path):
         photo = FSInputFile(photo_path)
+
         if len(text) <= MAX_CAPTION_LENGTH:
-            # Если текст помещается в подпись — отправляем вместе с фото
             await call.message.edit_media(
-                media=types.InputMediaPhoto(media=photo, caption=text, parse_mode="HTML"),
+                media=types.InputMediaPhoto(
+                    media=photo,
+                    caption=text,
+                    parse_mode="HTML"
+                ),
                 reply_markup=back_button_final(callback_data)
             )
         else:
-            # Если текст слишком длинный — разбиваем
             caption_part = text[:MAX_CAPTION_LENGTH]
             rest_part = text[MAX_CAPTION_LENGTH:]
-            chunks = [rest_part[i:i + MAX_CAPTION_LENGTH] for i in range(0, len(text), MAX_CAPTION_LENGTH)]
+
+            chunks = [
+                rest_part[i:i + MAX_CAPTION_LENGTH]
+                for i in range(0, len(rest_part), MAX_CAPTION_LENGTH)
+            ]
+
             await call.message.edit_media(
-                media=types.InputMediaPhoto(media=photo, caption=caption_part, parse_mode="HTML"),
+                media=types.InputMediaPhoto(
+                    media=photo,
+                    caption=caption_part,
+                    parse_mode="HTML"
+                )
+            )
+            sent_messages.append(call.message.message_id)
+
+            for i, chunk in enumerate(chunks):
+                if not chunk.strip():
+                    continue
+
+                is_last = i == len(chunks) - 1
+
+                msg = await call.message.answer(chunk, parse_mode="HTML",
+                    reply_markup=back_button_final(callback_data) if is_last else None)
+                sent_messages.append(msg.message_id if not is_last else None)
+
+                await asyncio.sleep(0.05)
+
+    # 🟢 ЕСЛИ НЕТ ФОТО
+    else:
+        if len(text) <= MAX_CAPTION_LENGTH:
+            await call.message.edit_text(
+                text,
+                parse_mode="HTML",
                 reply_markup=back_button_final(callback_data)
             )
-            # Отправляем остаток текста отдельным сообщением
-            for chunk in chunks[1:]:
-                if not chunk.strip():
-                    continue
-                await call.message.answer(chunk, parse_mode="HTML")
-    else:
-        # Если фото нет, просто отправляем текст (можно разбить на части тоже, если надо)
-        if len(text) <= MAX_CAPTION_LENGTH:
-            await call.message.edit_text(text, parse_mode="HTML", reply_markup=back_button_final(callback_data))
         else:
-            # Разбиваем и отправляем частями
-            chunks = [text[i:i + MAX_CAPTION_LENGTH] for i in range(0, len(text), MAX_CAPTION_LENGTH)]
-            await call.message.edit_text(chunks[0], parse_mode="HTML", reply_markup=back_button_final(callback_data))
-            for chunk in chunks[1:]:
+            chunks = [
+                text[i:i + MAX_CAPTION_LENGTH]
+                for i in range(0, len(text), MAX_CAPTION_LENGTH)
+            ]
+
+            await call.message.edit_text(
+                chunks[0],
+                parse_mode="HTML",
+            )
+            sent_messages.append(call.message.message_id)
+
+            for i, chunk in enumerate(chunks[1:]):
                 if not chunk.strip():
                     continue
-                await call.message.answer(chunk, parse_mode="HTML")
+
+                is_last = i == len(chunks[1:]) - 1
+
+                msg = await call.message.answer(chunk, parse_mode="HTML",
+                    reply_markup=back_button_final(callback_data) if is_last else None)
+                sent_messages.append(msg.message_id if not is_last else None)
+
+                await asyncio.sleep(0.05)
+
+    # 💾 сохраняем ID сообщений
+    await state.update_data(extra_messages=sent_messages)
