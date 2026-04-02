@@ -11,7 +11,7 @@ class MessageBuilder:
             "abv": "Alcohol by volume %",
             "history": "History"
         }
-        self.EXCLUDED_KEYS = {"name", "id", "photo_link", "category"}
+        self.EXCLUDED_KEYS = {"name", "id", "photo_link", "category", "rus_description"}
 
     def message_return(self, sheet_name: str):
         types_messages = {
